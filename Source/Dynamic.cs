@@ -18,11 +18,8 @@ namespace Carousel
     {
         static void Prefix(PawnRenderer __instance, Vector3 rootLoc, ref Rot4 bodyFacing, ref Rot4 headFacing, bool portrait, ref bool __state)
         {
-            if (portrait) return;
-
             var pawn = __instance.pawn;
-
-            if (pawn.GetPosture() != PawnPosture.Standing) return;
+            if (portrait || pawn.Map == null || pawn.GetPosture() != PawnPosture.Standing || pawn.Downed) return;
 
             HandleRotation(pawn, ref bodyFacing, ref headFacing);
         }
@@ -67,17 +64,15 @@ namespace Carousel
         }
     }
 
+    [HotSwappable]
     [HarmonyPatch(typeof(PawnRenderer), nameof(PawnRenderer.RenderPawnInternal))]
     [HarmonyPatch(new[] { typeof(Vector3), typeof(float), typeof(bool), typeof(Rot4), typeof(Rot4), typeof(RotDrawMode), typeof(bool), typeof(bool), typeof(bool) })]
     static class RenderPawnInternalPatch_SetCenter
     {
         static void Prefix(PawnRenderer __instance, Vector3 rootLoc, bool portrait, ref bool __state)
         {
-            if (portrait) return;
-
             var pawn = __instance.pawn;
-
-            if (pawn.GetPosture() != PawnPosture.Standing) return;
+            if (portrait || pawn.Map == null || pawn.GetPosture() != PawnPosture.Standing || pawn.Downed) return;
 
             if (GraphicsDrawMeshPatch.data == null)
             {
@@ -93,12 +88,28 @@ namespace Carousel
         }
     }
 
+    [HotSwappable]
     [HarmonyPatch(typeof(ThingWithComps), nameof(ThingWithComps.Draw))]
     static class ThingWithCompsDrawPatch
     {
         static void Prefix(Thing __instance)
         {
+            if (__instance is Corpse || __instance is Pawn) return;
             GraphicsDrawMeshPatch.data = (__instance.Map.CarouselComp().current, __instance.TrueCenter());
+        }
+
+        static void Postfix()
+        {
+            GraphicsDrawMeshPatch.data = null;
+        }
+    }
+
+    [HarmonyPatch(typeof(Tornado), nameof(Tornado.Draw))]
+    static class TornadoDrawPatch
+    {
+        static void Prefix(Tornado __instance)
+        {
+            GraphicsDrawMeshPatch.data = (__instance.Map.CarouselComp().current, new Vector3(__instance.realPosition.x, 0, __instance.realPosition.y));
         }
 
         static void Postfix()
@@ -154,7 +165,7 @@ namespace Carousel
             matrix.m03 = drawX - rotCenter.x;
             matrix.m23 = drawZ - rotCenter.z;
 
-            matrix = Matrix4x4.Rotate(Rot4.FromAngleFlat(current).AsQuat) * matrix;
+            matrix = Matrix4x4.Rotate(Quaternion.Euler(0, current, 0)) * matrix;
 
             matrix.m03 += rotCenter.x;
             matrix.m23 += rotCenter.z;
