@@ -12,17 +12,18 @@ using RimWorld;
 using RimWorld.Planet;
 using UnityEngine;
 using Verse;
+using Verse.AI;
 
 namespace Carousel
 {
     [StaticConstructorOnStartup]
     static class Carousel
     {
-        public static KeyBindingDef RotateKey = KeyBindingDef.Named("CarouselRotate");
-
+        public static readonly KeyBindingDef RotateKey = KeyBindingDef.Named("CarouselRotate");
+        
         static Carousel()
         {
-            // Differentiate from SunShadow. In vanilla, SunShadowFade = SunShadow
+            // Make SunShadowFade != SunShadow which isn't the case in vanilla
             AccessTools.Field(typeof(MatBases), nameof(MatBases.SunShadowFade))
                 .SetValue(null, new Material(MatBases.SunShadowFade));
 
@@ -33,12 +34,15 @@ namespace Carousel
     public class CarouselMod : Mod
     {
         public static Harmony harmony = new Harmony("carousel");
+        public static Settings settings;
 
         public CarouselMod(ModContentPack content) : base(content)
         {
+            settings = GetSettings<Settings>();
+
             harmony.Patch(
                 AccessTools.Constructor(typeof(MaterialAtlasPool.MaterialAtlas), new[] { typeof(Material) }),
-                postfix: new HarmonyMethod(typeof(CarouselMod), nameof(CarouselMod.MaterialAtlasCtorPostfix))
+                postfix: new HarmonyMethod(typeof(MaterialAtlasCtor_Patch), nameof(MaterialAtlasCtor_Patch.Postfix))
             );
 
             harmony.Patch(
@@ -52,15 +56,30 @@ namespace Carousel
            );
         }
 
-        public static Dictionary<Material, Material> linkedCornerMats = new Dictionary<Material, Material>();
-        public static HashSet<Material> linkedCornerMatsSet = new HashSet<Material>();
-
-        public static void MaterialAtlasCtorPostfix(MaterialAtlasPool.MaterialAtlas __instance)
+        public override void DoSettingsWindowContents(Rect inRect)
         {
-            foreach (var mat in __instance.subMats)
-            {
-                linkedCornerMatsSet.Add(linkedCornerMats[mat] = new Material(mat));
-            }
+            var listing = new Listing_Standard();
+            listing.Begin(inRect);
+            listing.ColumnWidth = 220f;
+
+            listing.CheckboxLabeled("Disable compass", ref settings.disableCompass);
+
+            listing.End();
+        }
+
+        public override string SettingsCategory()
+        {
+            return "Carousel";
+        }
+    }
+
+    public class Settings : ModSettings
+    {
+        public bool disableCompass;
+
+        public override void ExposeData()
+        {
+            Scribe_Values.Look(ref disableCompass, "disableCompass");
         }
     }
 
@@ -185,41 +204,40 @@ namespace Carousel
                     {
                         if (mesh.verts.Count == 0) continue;
 
-                        if (mesh.verts.Count % 4 == 0)
+                        if (mesh.material.HasProperty("_MainTex") &&
+                            BakeStaticAtlasesPatch.atlasTextures.TryGetValue(mesh.material.mainTexture, out var group) &&
+                            PrintPlanePatch.RightAtlasGroup(group))
                         {
-                            TransformUVs(mesh);
-                            TransformVerts(mesh);
+                            TransformAtlas(mesh, group);
+                            continue;
                         }
+
+                        TransformVerts(mesh);
+                        TransformUVs(mesh);
 
                         if (mesh.material == MatBases.SunShadowFade)
                             TransformShadows(mesh);
                     }
         }
 
-        static Vector3[] tempUVs = new Vector3[4];
-        static Vector3[] tempVerts = new Vector3[4];
+        static Vector3[] tempUVs = new Vector3[0];
+        static Vector3[] tempVerts = new Vector3[0];
 
         void TransformUVs(LayerSubMesh mesh)
         {
             // Fix texture flip
-            if (GraphicPrintPatch.matData.TryGetValue(mesh.material, out var matData))
+            if (GraphicPrintPatch_TransformMats.exchangeMats.TryGetValue(mesh.material, out var matData))
             {
-                var fullRot = GenMath.PositiveMod(matData.Item2.AsInt - Rot4.FromAngleFlat(target).AsInt, 4);
-                var graphic = matData.Item1;
-                var flipped = fullRot == 1 && graphic.EastFlipped || fullRot == 3 && graphic.WestFlipped ? 1 : 0;
-
-                var origUvs = Printer_Plane.defaultUvs;
                 var uvsc = mesh.uvs.Count;
+                var graphic = matData.Item1;
+
+                var relRot = GenMath.PositiveMod(matData.Item2.AsInt - Rot4.FromAngleFlat(target).AsInt, 4);
+                var flipped = relRot == 1 && graphic.EastFlipped || relRot == 3 && graphic.WestFlipped ? 1 : 0;
 
                 Util.ResizeIfNeeded(ref tempUVs, uvsc);
 
                 for (int i = 0; i < uvsc; i += 4)
-                {
-                    tempUVs[i + (3 * flipped & 3)] = origUvs[0];
-                    tempUVs[i + (1 + flipped & 3)] = origUvs[1];
-                    tempUVs[i + (2 + 3 * flipped & 3)] = origUvs[2];
-                    tempUVs[i + (3 + flipped & 3)] = origUvs[3];
-                }
+                    FixUVs(tempUVs, Printer_Plane.defaultUvs, i, flipped);
 
                 mesh.mesh.SetUVs(tempUVs, uvsc);
             }
@@ -230,53 +248,95 @@ namespace Carousel
             var offset = Rot4.FromAngleFlat(target);
             var offseti = offset.AsInt;
 
-            var uvs = mesh.uvs;
-            var vertsc = mesh.verts.Count;
-            var origVerts = NoAllocHelpers.ExtractArrayFromListT(mesh.verts);
-
             // Rotate around a center
             if (PrintPlanePatch.plantMats.Contains(mesh.material) ||
-                GraphicPrintPatch.graphicSingle.Contains(mesh.material))
+                GraphicPrintPatch_TransformMats.graphicSingle.Contains(mesh.material))
             {
-                if (uvs.Count * 4 != vertsc)
-                {
-                    Log.ErrorOnce($"Carousel: Bad material {mesh.material}", mesh.material.GetHashCode());
-                    return;
-                }
+                var vertsc = mesh.verts.Count / 5 * 4;
+                var vertsArr = NoAllocHelpers.ExtractArrayFromListT(mesh.verts);
 
                 Util.ResizeIfNeeded(ref tempVerts, vertsc);
 
                 for (int i = 0; i < vertsc; i += 4)
                 {
-                    // The mesh data lists are only used during mesh building and are otherwise unused
-                    // In between mesh rebuilding, Carousel uses the uv list to store object centers for rotation
-                    var c = uvs[i / 4];
+                    // The mesh data lists are only used during mesh building and are otherwise unused.
+                    // In between mesh rebuilding, Carousel reuses the lists to recalculate the meshes
+                    // but also appends additional information to the end of the vertex list
+                    var center = vertsArr[vertsc + i / 4];
 
-                    tempVerts[i] = c + (origVerts[i] - c).RotatedBy(offset);
-                    tempVerts[i + 1] = c + (origVerts[i + 1] - c).RotatedBy(offset);
-                    tempVerts[i + 2] = c + (origVerts[i + 2] - c).RotatedBy(offset);
-                    tempVerts[i + 3] = c + (origVerts[i + 3] - c).RotatedBy(offset);
+                    RotateVerts(tempVerts, vertsArr, i, center, offset);
                 }
 
                 mesh.mesh.SetVertices(tempVerts, vertsc);
             }
 
             // Exchange vertices
-            if (GraphicPrintPatch.matData.ContainsKey(mesh.material) ||
+            // This doesn't change the set of their values but changes their order
+            if (GraphicPrintPatch_TransformMats.exchangeMats.ContainsKey(mesh.material) ||
                LinkedPrintPatch.linkedMaterials.Contains(mesh.material))
             {
+                var vertsc = mesh.verts.Count;
+                var vertsArr = NoAllocHelpers.ExtractArrayFromListT(mesh.verts);
+
                 Util.ResizeIfNeeded(ref tempVerts, vertsc);
 
                 for (int i = 0; i < vertsc; i += 4)
-                {
-                    tempVerts[i].SetXZY(ref origVerts[i + (offseti & 3)], origVerts[i].y);
-                    tempVerts[i + 1].SetXZY(ref origVerts[i + (offseti + 1 & 3)], origVerts[i + 1].y);
-                    tempVerts[i + 2].SetXZY(ref origVerts[i + (offseti + 2 & 3)], origVerts[i + 2].y);
-                    tempVerts[i + 3].SetXZY(ref origVerts[i + (offseti + 3 & 3)], origVerts[i + 3].y);
-                }
+                    ExchangeVerts(tempVerts, vertsArr, i, offseti);
 
                 mesh.mesh.SetVertices(tempVerts, vertsc);
             }
+        }
+
+        void TransformAtlas(LayerSubMesh mesh, TextureAtlasGroup group)
+        {
+            var offset = Rot4.FromAngleFlat(target);
+            var offseti = offset.AsInt;
+            var vertsc = mesh.verts.Count / 5 * 4;
+            var uvsc = mesh.uvs.Count;
+            var vertsArr = NoAllocHelpers.ExtractArrayFromListT(mesh.verts);
+            var uvsArr = NoAllocHelpers.ExtractArrayFromListT(mesh.uvs);
+
+            Util.ResizeIfNeeded(ref tempVerts, vertsc);
+            Util.ResizeIfNeeded(ref tempUVs, uvsc);
+
+            for (int i = 0; i < vertsc; i += 4)
+            {
+                var data = vertsArr[vertsc + i / 4];
+
+                if (data.x == PrintPlanePatch.SPECIAL_X)
+                {
+                    ExchangeVerts(tempVerts, vertsArr, i, offseti);
+
+                    var rotData = ((int)data.z & 0b1100) >> 2;
+                    var flipData = (int)data.z & 0b0011;
+
+                    var relRot = GenMath.PositiveMod(rotData - Rot4.FromAngleFlat(target).AsInt, 4);
+                    var flipped = relRot == 1 && ((flipData & 1) == 1) || relRot == 3 && ((flipData & 2) == 2) ? 1 : 0;
+
+                    var rotatedMat = GraphicPrintPatch_SetData.intToGraphic[(int)data.y].mats[(rotData + Rot4.FromAngleFlat(-target).AsInt) % 4];
+                    Graphic.TryGetTextureAtlasReplacementInfo(rotatedMat, group, false, false, out _, out var uvs, out _);
+
+                    FixUVs(
+                        tempUVs,
+                        uvs,
+                        i,
+                        flipped
+                    );
+                }
+                else if (data.x != PrintPlanePatch.EMPTY_X)
+                {
+                    RotateVerts(tempVerts, vertsArr, i, data, offset);
+                    Array.Copy(uvsArr, i, tempUVs, i, 4);
+                }
+                else
+                {
+                    Array.Copy(vertsArr, i, tempVerts, i, 4);
+                    Array.Copy(uvsArr, i, tempUVs, i, 4);
+                }
+            }
+
+            mesh.mesh.SetVertices(tempVerts, vertsc);
+            mesh.mesh.SetUVs(tempUVs, uvsc);
         }
 
         void TransformShadows(LayerSubMesh mesh)
@@ -309,6 +369,30 @@ namespace Carousel
             }
 
             mesh.mesh.SetVertices(tempVerts, vertsc);
+        }
+
+        static void FixUVs(Vector3[] tempUVs, Vector2[] origUvs, int i, int flipped)
+        {
+            tempUVs[i + (0 + 3 * flipped & 3)] = origUvs[0];
+            tempUVs[i + (1 + 1 * flipped & 3)] = origUvs[1];
+            tempUVs[i + (2 + 3 * flipped & 3)] = origUvs[2];
+            tempUVs[i + (3 + 1 * flipped & 3)] = origUvs[3];
+        }
+
+        static void ExchangeVerts(Vector3[] tempVerts, Vector3[] vertsArr, int i, int offseti)
+        {
+            tempVerts[i].SetXZY(ref vertsArr[i + (offseti & 3)], vertsArr[i].y);
+            tempVerts[i + 1].SetXZY(ref vertsArr[i + (offseti + 1 & 3)], vertsArr[i + 1].y);
+            tempVerts[i + 2].SetXZY(ref vertsArr[i + (offseti + 2 & 3)], vertsArr[i + 2].y);
+            tempVerts[i + 3].SetXZY(ref vertsArr[i + (offseti + 3 & 3)], vertsArr[i + 3].y);
+        }
+
+        static void RotateVerts(Vector3[] tempVerts, Vector3[] vertsArr, int i, Vector3 c, Rot4 offset)
+        {
+            tempVerts[i] = c + (vertsArr[i] - c).RotatedBy(offset);
+            tempVerts[i + 1] = c + (vertsArr[i + 1] - c).RotatedBy(offset);
+            tempVerts[i + 2] = c + (vertsArr[i + 2] - c).RotatedBy(offset);
+            tempVerts[i + 3] = c + (vertsArr[i + 3] - c).RotatedBy(offset);
         }
 
         public override void ExposeData()

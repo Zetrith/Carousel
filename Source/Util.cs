@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 using Verse;
 
 namespace Carousel
@@ -26,14 +27,6 @@ namespace Carousel
             return a;
         }
 
-        public static void ResizeList<T>(List<T> list, int count)
-        {
-            if (list.Capacity < count)
-                list.Capacity = count;
-
-            NoAllocHelpers.ResizeList(list, count);
-        }
-
         public static V GetOrAdd<K, V>(this Dictionary<K, V> dict, K key, Func<K, V> def)
         {
             if (!dict.TryGetValue(key, out var val))
@@ -44,10 +37,12 @@ namespace Carousel
         public static void SetUVs(this Mesh mesh, Vector3[] uvs, int len)
         {
             mesh.SetSizedArrayForChannel(
-                UnityEngine.Rendering.VertexAttribute.TexCoord0,
-                Mesh.InternalVertexChannelType.Float,
+                VertexAttribute.TexCoord0,
+                VertexAttributeFormat.Float32,
                 3,
                 uvs,
+                len,
+                0,
                 len
             );
         }
@@ -55,10 +50,12 @@ namespace Carousel
         public static void SetVertices(this Mesh mesh, Vector3[] verts, int len)
         {
             mesh.SetSizedArrayForChannel(
-                UnityEngine.Rendering.VertexAttribute.Position,
-                Mesh.InternalVertexChannelType.Float,
+                VertexAttribute.Position,
+                VertexAttributeFormat.Float32,
                 3,
                 verts,
+                len,
+                0,
                 len
             );
         }

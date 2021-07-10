@@ -12,19 +12,18 @@ using Verse;
 namespace Carousel
 {
     [HotSwappable]
-    [HarmonyPatch(typeof(PawnRenderer), nameof(PawnRenderer.RenderPawnInternal))]
-    [HarmonyPatch(new[] { typeof(Vector3), typeof(float), typeof(bool), typeof(Rot4), typeof(Rot4), typeof(RotDrawMode), typeof(bool), typeof(bool), typeof(bool) })]
+    [HarmonyPatch(typeof(PawnRenderer), nameof(PawnRenderer.RenderPawnAt))]
     static class RenderPawnInternalPatch_HandleRotation
     {
-        static void Prefix(PawnRenderer __instance, Vector3 rootLoc, ref Rot4 bodyFacing, ref Rot4 headFacing, bool portrait, ref bool __state)
+        static void Prefix(PawnRenderer __instance, ref Rot4? rotOverride, ref bool __state)
         {
             var pawn = __instance.pawn;
-            if (portrait || pawn.Map == null || pawn.GetPosture() != PawnPosture.Standing || pawn.Downed) return;
+            if (pawn.Map == null || pawn.GetPosture() != PawnPosture.Standing || pawn.Downed) return;
 
-            HandleRotation(pawn, ref bodyFacing, ref headFacing);
+            HandleRotation(pawn, ref rotOverride);
         }
 
-        static void HandleRotation(Pawn pawn, ref Rot4 bodyFacing, ref Rot4 headFacing)
+        static void HandleRotation(Pawn pawn, ref Rot4? rotOverride)
         {
             var comp = pawn.Map.CarouselComp();
             var camera = Rot4.FromAngleFlat(-comp.current).AsInt;
@@ -35,13 +34,12 @@ namespace Carousel
                 var movingRotation = FaceAdjacentCell(pawn.Position, pawn.pather.nextCell, Rot4.FromAngleFlat(-comp.current));
                 if (movingRotation != null)
                 {
-                    bodyFacing = headFacing = new Rot4(movingRotation.Value.AsInt);
+                    rotOverride = new Rot4(movingRotation.Value.AsInt);
                     return;
                 }
             }
 
-            bodyFacing = new Rot4(bodyFacing.AsInt + camera);
-            headFacing = new Rot4(headFacing.AsInt + camera);
+            rotOverride = new Rot4((rotOverride?.AsInt ?? pawn.Rotation.AsInt) + camera);
         }
 
         static Rot4? FaceAdjacentCell(IntVec3 pawn, IntVec3 c, Rot4 cameraRot)
@@ -65,18 +63,17 @@ namespace Carousel
     }
 
     [HotSwappable]
-    [HarmonyPatch(typeof(PawnRenderer), nameof(PawnRenderer.RenderPawnInternal))]
-    [HarmonyPatch(new[] { typeof(Vector3), typeof(float), typeof(bool), typeof(Rot4), typeof(Rot4), typeof(RotDrawMode), typeof(bool), typeof(bool), typeof(bool) })]
+    [HarmonyPatch(typeof(PawnRenderer), nameof(PawnRenderer.RenderPawnAt))]
     static class RenderPawnInternalPatch_SetCenter
     {
-        static void Prefix(PawnRenderer __instance, Vector3 rootLoc, bool portrait, ref bool __state)
+        static void Prefix(PawnRenderer __instance, Vector3 drawLoc, ref bool __state)
         {
             var pawn = __instance.pawn;
-            if (portrait || pawn.Map == null || pawn.GetPosture() != PawnPosture.Standing || pawn.Downed) return;
+            if (pawn.Map == null || pawn.GetPosture() != PawnPosture.Standing || pawn.Downed) return;
 
             if (GraphicsDrawMeshPatch.data == null)
             {
-                GraphicsDrawMeshPatch.data = (pawn.Map.CarouselComp().current, rootLoc);
+                GraphicsDrawMeshPatch.data = (pawn.Map.CarouselComp().current, drawLoc);
                 __state = true;
             }
         }
@@ -118,6 +115,7 @@ namespace Carousel
         }
     }
 
+    // todo handle DrawBatch
     [HarmonyPatch]
     static class OverlayDrawerPatch
     {
@@ -130,7 +128,7 @@ namespace Carousel
 
         static void Prefix([HarmonyArgument(0)] Thing t)
         {
-            GraphicsDrawMeshPatch.data = (t.Map.CarouselComp().current, t.TrueCenter());
+            GraphicsDrawMeshPatch.data = (Find.CurrentMap.CarouselComp().current, t.TrueCenter());
         }
 
         static void Postfix()

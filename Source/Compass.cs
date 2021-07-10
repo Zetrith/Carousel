@@ -16,7 +16,7 @@ namespace Carousel
     {
         static void Postfix(GameConditionManager __instance, ref float __result)
         {
-            if (__instance != Find.CurrentMap?.gameConditionManager) return;
+            if (__instance != Find.CurrentMap?.gameConditionManager || CarouselMod.settings.disableCompass) return;
             __result += 84f;
         }
     }
@@ -27,7 +27,7 @@ namespace Carousel
     {
         static void Prefix(GameConditionManager __instance, Rect rect)
         {
-            if (__instance != Find.CurrentMap?.gameConditionManager) return;
+            if (__instance != Find.CurrentMap?.gameConditionManager || CarouselMod.settings.disableCompass) return;
 
             var comp = Find.CurrentMap.CarouselComp();
             var center = new Vector2(UI.screenWidth - 10f - 32f, rect.yMax - 10f - 32f);

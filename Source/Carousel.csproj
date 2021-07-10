@@ -5,7 +5,7 @@
 	<LangVersion>8.0</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <OutputPath>..\Assemblies\</OutputPath>
+    <OutputPath>..\1.3\Assemblies\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <DebugType>None</DebugType>
@@ -61,15 +61,15 @@
     <None Remove=".editorconfig" />
   </ItemGroup>
   
-  <Target Name="Publicise" BeforeTargets="BeforeBuild">
+  <Target Name="Publicise1" BeforeTargets="BeforeBuild">
     <Publicise AssemblyPath="..\..\..\RimWorldWin64_Data\Managed\Assembly-CSharp.dll" OutputPath="..\..\..\RimWorldWin64_Data\Managed\" />
   </Target>
   
-  <Target Name="Publicise" BeforeTargets="BeforeBuild">
+  <Target Name="Publicise2" BeforeTargets="BeforeBuild">
     <Publicise AssemblyPath="..\..\..\RimWorldWin64_Data\Managed\UnityEngine.CoreModule.dll" OutputPath="..\..\..\RimWorldWin64_Data\Managed\" />
   </Target>
   
-  <Target Name="Publicise" BeforeTargets="BeforeBuild">
+  <Target Name="Publicise3" BeforeTargets="BeforeBuild">
     <Publicise AssemblyPath="..\..\..\Mods\HarmonyRimWorld\Current\Assemblies\0Harmony.dll" OutputPath="..\..\..\RimWorldWin64_Data\Managed\" />
   </Target>
   

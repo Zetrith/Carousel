@@ -38,7 +38,7 @@ namespace Carousel
             LayerSubMesh mesh = layer.GetSubMesh(MatBases.SunShadowFade);
 
             if (mesh.verts.Count > 0)
-                mesh.uvs.Add(center - PrintPlanePatch.currentThing ?? Vector3.zero);
+                mesh.uvs.Add(center - PrintPlanePatch.currentThingCenter ?? Vector3.zero);
         }
     }
 }

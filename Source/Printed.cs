@@ -5,9 +5,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading.Tasks;
 using UnityEngine;
 using Verse;
 
@@ -17,7 +14,7 @@ namespace Carousel
     [HarmonyPatch(typeof(SectionLayer), nameof(SectionLayer.DrawLayer))]
     static class SectionLayerDrawPatch
     {
-        static MethodBase ZeroGetter = AccessTools.PropertyGetter(typeof(Vector3), nameof(Vector3.zero));
+        static MethodBase MatrixIdentity = AccessTools.PropertyGetter(typeof(Matrix4x4), nameof(Matrix4x4.identity));
         static FieldInfo SubMeshMat = AccessTools.Field(typeof(LayerSubMesh), nameof(LayerSubMesh.material));
 
         static MethodBase OffsetMethod = AccessTools.Method(typeof(SectionLayerDrawPatch), nameof(SectionLayerDrawPatch.AddOffset));
@@ -29,7 +26,7 @@ namespace Carousel
             {
                 yield return inst;
 
-                if (inst.operand == ZeroGetter)
+                if (inst.operand == MatrixIdentity)
                 {
                     yield return new CodeInstruction(OpCodes.Ldloc_2);
                     yield return new CodeInstruction(OpCodes.Ldfld, SubMeshMat);
@@ -45,15 +42,17 @@ namespace Carousel
             }
         }
 
-        static Vector3 AddOffset(Vector3 v, Material mat, SectionLayer layer)
+        static Matrix4x4 AddOffset(Matrix4x4 matrix, Material mat, SectionLayer layer)
         {
-            if (CarouselMod.linkedCornerMatsSet.Contains(mat))
+            if (MaterialAtlasCtor_Patch.linkedCornerMatsSet.Contains(mat))
             {
-                v.z -= Graphic_LinkedCornerFiller.ShiftUp;
-                v += new Vector3(0, 0, Graphic_LinkedCornerFiller.ShiftUp).RotatedBy(layer.Map.CarouselComp().current);
+                matrix = Matrix4x4.Translate(
+                    new Vector3(0, 0, -Graphic_LinkedCornerFiller.ShiftUp) +
+                    new Vector3(0, 0, Graphic_LinkedCornerFiller.ShiftUp).RotatedBy(layer.Map.CarouselComp().current)
+                );
             }
 
-            return v;
+            return matrix;
         }
 
         // Atlas material => (Linked flags, Original material)
@@ -64,7 +63,7 @@ namespace Carousel
             if (LinkedPrintPatch.linkedMaterials.Contains(mat))
                 return RemapLinked(mat, Rot4.FromAngleFlat(layer.Map.CarouselComp().set));
 
-            if (GraphicPrintPatch.matData.TryGetValue(mat, out var data))
+            if (GraphicPrintPatch_TransformMats.exchangeMats.TryGetValue(mat, out var data))
                 return data.Item1.mats[(data.Item2.AsInt + Rot4.FromAngleFlat(-layer.Map.CarouselComp().set).AsInt) % 4];
 
             return mat;
@@ -100,15 +99,15 @@ namespace Carousel
 
     [HotSwappable]
     [HarmonyPatch(typeof(Graphic), nameof(Graphic.Print))]
-    static class GraphicPrintPatch
+    static class GraphicPrintPatch_TransformMats
     {
-        public static Dictionary<Material, (Graphic_Multi, Rot4)> matData = new Dictionary<Material, (Graphic_Multi, Rot4)>();
+        public static Dictionary<Material, (Graphic_Multi, Rot4)> exchangeMats = new Dictionary<Material, (Graphic_Multi, Rot4)>();
         public static Dictionary<Graphic, Material> copiedForFlip = new Dictionary<Graphic, Material>();
 
         public static HashSet<Material> graphicSingle = new HashSet<Material>();
 
         static MethodBase MatAt = AccessTools.Method(typeof(Graphic), nameof(Graphic.MatAt));
-        static MethodBase TransformMaterialMethod = AccessTools.Method(typeof(GraphicPrintPatch), nameof(GraphicPrintPatch.TransformMaterial));
+        static MethodBase CacheMaterialMethod = AccessTools.Method(typeof(GraphicPrintPatch_TransformMats), nameof(GraphicPrintPatch_TransformMats.CacheMaterial));
 
         static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> insts)
         {
@@ -120,15 +119,15 @@ namespace Carousel
                 {
                     yield return new CodeInstruction(OpCodes.Ldarg_0);
                     yield return new CodeInstruction(OpCodes.Ldarg_2);
-                    yield return new CodeInstruction(OpCodes.Call, TransformMaterialMethod);
+                    yield return new CodeInstruction(OpCodes.Call, CacheMaterialMethod);
                 }
             }
         }
 
-        static Material TransformMaterial(Material mat, Graphic graphic, Thing t)
+        static Material CacheMaterial(Material mat, Graphic graphic, Thing t)
         {
             // For these Graphics, not an actual rotation but a texture switch is used for rotating
-            if (graphic.GetType() == typeof(Graphic_Multi) && !graphic.ShouldDrawRotated)
+            if (ShouldExchangeVerts(graphic))
             {
                 var outMat = mat;
                 var rot = t.Rotation;
@@ -136,10 +135,15 @@ namespace Carousel
                 if (rot == Rot4.East && graphic.EastFlipped || rot == Rot4.West && graphic.WestFlipped)
                 {
                     if (!copiedForFlip.TryGetValue(graphic, out outMat))
+                    {
                         copiedForFlip[graphic] = outMat = new Material(mat);
+
+                        if (MaterialPool.matDictionaryReverse.TryGetValue(mat, out var matreq))
+                            MaterialPool.matDictionaryReverse[outMat] = matreq;
+                    }
                 }
 
-                matData[outMat] = ((Graphic_Multi)graphic, rot);
+                exchangeMats[outMat] = ((Graphic_Multi)graphic, rot);
 
                 return outMat;
             }
@@ -150,13 +154,19 @@ namespace Carousel
             return mat;
         }
 
+        public static bool ShouldExchangeVerts(Graphic graphic)
+        {
+            return graphic.GetType() == typeof(Graphic_Multi) && !graphic.ShouldDrawRotated;
+        }
+
         public static bool ShouldRotateVertices(Graphic graphic, Thing t)
         {
             // If something has a single texture but rotates anyway it means it looks good from every side and
             // doesn't have to rotate with the camera
             return graphic.GetType() == typeof(Graphic_Single) && (!graphic.ShouldDrawRotated || !t.def.rotatable) ||
                 graphic.GetType() == typeof(Graphic_Multi) && graphic.ShouldDrawRotated ||
-                graphic.GetType() == typeof(Graphic_Random);
+                graphic.GetType() == typeof(Graphic_StackCount) ||
+                t.def.category == ThingCategory.Item;
         }
     }
 
@@ -180,32 +190,61 @@ namespace Carousel
         static void Prefix(Plant __instance)
         {
             printing = true;
-            PrintPlanePatch.currentThing = __instance.TrueCenter();
+            PrintPlanePatch.currentThingCenter = __instance.TrueCenter();
         }
 
         static void Postfix()
         {
-            PrintPlanePatch.currentThing = null;
+            PrintPlanePatch.currentThingCenter = null;
             printing = false;
         }
     }
 
+    // todo handle MinifiedThings
+    [HotSwappable]
     [HarmonyPatch(typeof(Graphic), nameof(Graphic.Print))]
-    static class GraphicPrintPatch_SetCenter
+    static class GraphicPrintPatch_SetData
     {
-        static void Prefix(Graphic __instance, Thing thing, ref bool __state)
+        public static Dictionary<Graphic_Multi, int> graphicToInt = new Dictionary<Graphic_Multi, int>();
+        public static List<Graphic_Multi> intToGraphic = new List<Graphic_Multi>();
+
+        static void Prefix(Graphic __instance, Thing thing, ref int __state)
         {
-            if (GraphicPrintPatch.ShouldRotateVertices(__instance, thing) && PrintPlanePatch.currentThing == null)
+            if (PrintPlanePatch.currentThingCenter == null &&
+                GraphicPrintPatch_TransformMats.ShouldRotateVertices(__instance, thing))
             {
-                PrintPlanePatch.currentThing = thing.TrueCenter();
-                __state = true;
+                PrintPlanePatch.currentThingCenter = thing.TrueCenter();
+                __state |= 1;
+            }
+
+            if (PrintPlanePatch.currentThingData == null &&
+                GraphicPrintPatch_TransformMats.ShouldExchangeVerts(__instance))
+            {
+                var multi = (Graphic_Multi)__instance;
+                if (!graphicToInt.TryGetValue(multi, out var id))
+                {
+                    id = intToGraphic.Count;
+                    graphicToInt[multi] = id;
+                    intToGraphic.Add(multi);
+                }
+
+                PrintPlanePatch.currentThingData = new Vector3(
+                    PrintPlanePatch.SPECIAL_X,
+                    id,
+                    ((__instance.WestFlipped ? 2 : 0) + (__instance.EastFlipped ? 1 : 0)) | (thing.Rotation.AsInt << 2)
+                );
+
+                __state |= 2;
             }
         }
 
-        static void Postfix(bool __state)
+        static void Postfix(int __state)
         {
-            if (__state)
-                PrintPlanePatch.currentThing = null;
+            if ((__state & 1) == 1)
+                PrintPlanePatch.currentThingCenter = null;
+
+            if ((__state & 2) == 2)
+                PrintPlanePatch.currentThingData = null;
         }
     }
 
@@ -213,24 +252,38 @@ namespace Carousel
     [HarmonyPatch(typeof(Printer_Plane), nameof(Printer_Plane.PrintPlane))]
     static class PrintPlanePatch
     {
-        public static Vector3? currentThing;
+        public static Vector3? currentThingCenter;
+        public static Vector3? currentThingData;
+
         public static HashSet<Material> plantMats = new HashSet<Material>();
+
+        public const int SPECIAL_X = 9999;
+        public const int EMPTY_X = 99999;
+        public static readonly Vector3 EMPTY = new Vector3(EMPTY_X, 0, 0);
 
         static void Prefix(ref Material mat, Vector2[] uvs)
         {
-            if (uvs == Graphic_LinkedCornerFiller.CornerFillUVs)
-                mat = CarouselMod.linkedCornerMats[mat];
+            bool atlasTexture = mat.HasProperty("_MainTex") &&
+                BakeStaticAtlasesPatch.atlasTextures.TryGetValue(mat.mainTexture, out var atlasGroup) &&
+                RightAtlasGroup(atlasGroup);
 
-            if (PlantPrintPatch.printing)
+            if (uvs == Graphic_LinkedCornerFiller.CornerFillUVs)
+                mat = MaterialAtlasCtor_Patch.linkedCornerMats[mat];
+
+            if (PlantPrintPatch.printing && !atlasTexture)
                 plantMats.Add(mat);
 
-            if (currentThing != null)
-            {
-                var list = FinalizeMeshPatch.centerBuffers.GetOrAdd(mat, k => new List<Vector3>());
+            var toAdd = currentThingCenter ?? (atlasTexture ? (currentThingData ?? EMPTY) : (Vector3?)null);
 
-                var center = currentThing.Value;
-                list.Add(center);
-            }
+            if (toAdd != null)
+                FinalizeMeshPatch.dataBuffers.GetOrAdd(mat, k => new List<Vector3>()).Add(toAdd.Value);
+        }
+
+        public static bool RightAtlasGroup(TextureAtlasGroup atlasGroup)
+        {
+            return atlasGroup == TextureAtlasGroup.Plant ||
+                atlasGroup == TextureAtlasGroup.Building ||
+                atlasGroup == TextureAtlasGroup.Item;
         }
     }
 
@@ -238,18 +291,17 @@ namespace Carousel
     [HarmonyPatch(typeof(SectionLayer), nameof(SectionLayer.FinalizeMesh))]
     static class FinalizeMeshPatch
     {
-        public static Dictionary<Material, List<Vector3>> centerBuffers = new Dictionary<Material, List<Vector3>>();
+        public static Dictionary<Material, List<Vector3>> dataBuffers = new Dictionary<Material, List<Vector3>>();
 
         static void Postfix(SectionLayer __instance)
         {
-            if (centerBuffers.Any(kv => kv.Value.Count > 0))
+            if (dataBuffers.Any(kv => kv.Value.Count > 0))
             {
-                foreach (var kv in centerBuffers)
+                foreach (var kv in dataBuffers)
                 {
                     var mesh = __instance.GetSubMesh(kv.Key);
 
-                    NoAllocHelpers.ResizeList(mesh.uvs, 0);
-                    mesh.uvs.InsertRange(0, kv.Value);
+                    mesh.verts.InsertRange(mesh.verts.Count, kv.Value);
                     NoAllocHelpers.ResizeList(kv.Value, 0);
                 }
             }
@@ -275,6 +327,34 @@ namespace Carousel
                 return;
 
             comp.UpdateSection(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(GlobalTextureAtlasManager), nameof(GlobalTextureAtlasManager.BakeStaticAtlases))]
+    static class BakeStaticAtlasesPatch
+    {
+        public static Dictionary<Texture, TextureAtlasGroup> atlasTextures = new Dictionary<Texture, TextureAtlasGroup>();
+
+        static void Postfix()
+        {
+            atlasTextures.Clear();
+            foreach (var atlas in GlobalTextureAtlasManager.staticTextureAtlases)
+                atlasTextures[atlas.ColorTexture] = atlas.group;
+        }
+    }
+
+    // Early patch
+    static class MaterialAtlasCtor_Patch
+    {
+        public static Dictionary<Material, Material> linkedCornerMats = new Dictionary<Material, Material>();
+        public static HashSet<Material> linkedCornerMatsSet = new HashSet<Material>();
+
+        public static void Postfix(MaterialAtlasPool.MaterialAtlas __instance)
+        {
+            foreach (var mat in __instance.subMats)
+            {
+                linkedCornerMatsSet.Add(linkedCornerMats[mat] = new Material(mat));
+            }
         }
     }
 

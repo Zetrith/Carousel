@@ -11,14 +11,23 @@ namespace Carousel
     [HarmonyPatch(typeof(CameraDriver), nameof(CameraDriver.CurrentViewRect), MethodType.Getter)]
     static class CurrentViewRectPatch
     {
+        private static int lastViewRectGetFrame = -1;
+        private static CellRect lastViewRect;
+
         static void Postfix(ref CellRect __result)
         {
-            var center = __result.CenterVector3;
-            var corners = __result.Corners.Select(c => (c.ToVector3Shifted() - center).RotatedBy(-Find.CurrentMap.CarouselComp().current) + center);
-            var min = corners.Aggregate((a, b) => Vector3.Min(a, b));
-            var max = corners.Aggregate((a, b) => Vector3.Max(a, b));
+            if (Time.frameCount != lastViewRectGetFrame)
+            {
+                var center = __result.CenterVector3;
+                var corners = __result.Corners.Select(c => (c.ToVector3Shifted() - center).RotatedBy(-Find.CurrentMap.CarouselComp().current) + center);
+                var min = corners.Aggregate((a, b) => Vector3.Min(a, b));
+                var max = corners.Aggregate((a, b) => Vector3.Max(a, b));
 
-            __result = CellRect.FromLimits(FloorVec(min), CeilVec(max));
+                lastViewRectGetFrame = Time.frameCount;
+                lastViewRect = CellRect.FromLimits(FloorVec(min), CeilVec(max));
+            }
+
+            __result = lastViewRect;
         }
 
         static IntVec3 FloorVec(Vector3 v) => new IntVec3(Mathf.FloorToInt(v.x), Mathf.FloorToInt(v.y), Mathf.FloorToInt(v.z));
