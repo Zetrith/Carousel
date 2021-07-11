@@ -126,8 +126,7 @@ namespace Carousel
 
         static Material CacheMaterial(Material mat, Graphic graphic, Thing t)
         {
-            // For these Graphics, not an actual rotation but a texture switch is used for rotating
-            if (ShouldExchangeVerts(graphic))
+            if (ShouldExchangeVertices(graphic))
             {
                 var outMat = mat;
                 var rot = t.Rotation;
@@ -154,8 +153,9 @@ namespace Carousel
             return mat;
         }
 
-        public static bool ShouldExchangeVerts(Graphic graphic)
+        public static bool ShouldExchangeVertices(Graphic graphic)
         {
+            // For these Graphics, not an actual rotation but a texture switch is used for rotating
             return graphic.GetType() == typeof(Graphic_Multi) && !graphic.ShouldDrawRotated;
         }
 
@@ -218,7 +218,7 @@ namespace Carousel
             }
 
             if (PrintPlanePatch.currentThingData == null &&
-                GraphicPrintPatch_TransformMats.ShouldExchangeVerts(__instance))
+                GraphicPrintPatch_TransformMats.ShouldExchangeVertices(__instance))
             {
                 var multi = (Graphic_Multi)__instance;
                 if (!graphicToInt.TryGetValue(multi, out var id))

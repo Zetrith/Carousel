@@ -115,7 +115,6 @@ namespace Carousel
         }
     }
 
-    // todo handle DrawBatch
     [HarmonyPatch]
     static class OverlayDrawerPatch
     {
@@ -141,12 +140,17 @@ namespace Carousel
     [HarmonyPatch]
     static class GraphicsDrawMeshPatch
     {
+        // Rotation angle and center
         public static (float, Vector3)? data;
 
         static IEnumerable<MethodBase> TargetMethods()
         {
             foreach (var m in AccessTools.GetDeclaredMethods(typeof(Graphics)))
                 if (m.Name == "DrawMesh" && m.GetParameters().Length == 12 && m.GetParameters()[1].Name == "matrix")
+                    yield return m;
+
+            foreach (var m in AccessTools.GetDeclaredMethods(typeof(DrawBatch)))
+                if (m.Name == "DrawMesh")
                     yield return m;
         }
 
