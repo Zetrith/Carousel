@@ -121,7 +121,7 @@ namespace Carousel
         static IEnumerable<MethodBase> TargetMethods()
         {
             foreach (var m in AccessTools.GetDeclaredMethods(typeof(OverlayDrawer)))
-                if (m.GetParameters().Length > 0 && m.GetParameters()[0].ParameterType == typeof(Thing))
+                if (m.Name.StartsWith("Render") && m.GetParameters().Length > 0 && m.GetParameters()[0].ParameterType == typeof(Thing))
                     yield return m;
         }
 
