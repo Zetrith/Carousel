@@ -339,7 +339,7 @@ namespace Carousel
         {
             atlasTextures.Clear();
             foreach (var atlas in GlobalTextureAtlasManager.staticTextureAtlases)
-                atlasTextures[atlas.ColorTexture] = atlas.group;
+                atlasTextures[atlas.ColorTexture] = atlas.groupKey.group;
         }
     }
 
