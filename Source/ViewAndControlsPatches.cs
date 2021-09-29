@@ -16,6 +16,8 @@ namespace Carousel
 
         static void Postfix(ref CellRect __result)
         {
+            if (Find.CurrentMap == null) return;
+
             if (Time.frameCount != lastViewRectGetFrame)
             {
                 var center = __result.CenterVector3;

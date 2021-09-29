@@ -19,7 +19,7 @@ namespace Carousel
     static class Carousel
     {
         public static readonly KeyBindingDef RotateKey = KeyBindingDef.Named("CarouselRotate");
-        
+
         static Carousel()
         {
             // Make SunShadowFade != SunShadow which isn't the case in vanilla
